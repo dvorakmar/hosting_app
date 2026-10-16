@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Provisioning Script - Automatizované vytvoření WordPress instance
+# ==============================================================================
+# Použití: ./provision.sh <site_name>
+# Příklad: ./provision.sh web1
+# ==============================================================================
+
+set -euo pipefail
+
+# --- Zjištění cest ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="${PROJECT_ROOT}/.env"
+
+# --- Načtení proměnných z .env ---
+if [ ! -f "$ENV_FILE" ]; then
+    echo "CHYBA: Soubor .env nebyl nalezen v ${ENV_FILE}" >&2
+    exit 1
+fi
+
+while IFS='=' read -r key value || [ -n "$key" ]; do
+    [[ "$key" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$key" ]] && continue
+    key=$(echo "$key" | tr -d '[:space:]')
+    value=$(echo "$value" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//" | sed "s/^[\"']//;s/[\"']$//")
+    export "$key=$value" 2>/dev/null || true
+done < "$ENV_FILE"
+
+# Zaručení, že PROJECT_ROOT vždy odpovídá reálnému umístění projektu (i po načtení .env)
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# --- Validace argumentu ---
+if [ $# -lt 1 ]; then
+    echo "Použití: $0 <site_name>" >&2
+    echo "Příklad: $0 web1" >&2
+    exit 1
+fi
+
+SITE_NAME="$1"
+
+# Striktní regex validace názvu: pouze malá písmena a čísla začínající 'web' (např. web1, webblog)
+if ! [[ "$SITE_NAME" =~ ^web[0-9a-z]{1,24}$ ]]; then
+    echo "CHYBA: Neplatný název webu '${SITE_NAME}'. Musí začínat 'web' a obsahovat pouze malá písmena a číslice (např. web1, web2)." >&2
+    exit 1
+fi
+
+echo "======================================================"
+echo "  Zahájení Provisioningu: ${SITE_NAME}"
+echo "======================================================"
+
+# --- Cesty pro web ---
+SITES_DIR="${PROJECT_ROOT}/data/sites"
+SITE_DIR="${SITES_DIR}/${SITE_NAME}"
+CLIENTS_COMPOSE_FILE="${PROJECT_ROOT}/clients/docker-compose-clients.yml"
+WP_IMAGE="${WP_IMAGE:-wordpress:6.7-php8.3-apache}"
+
+# Kontrola, zda web již neexistuje
+if [ -d "$SITE_DIR" ]; then
+    echo "CHYBA: Adresář ${SITE_DIR} již existuje. Web '${SITE_NAME}' již pravděpodobně běží." >&2
+    exit 1
+fi
+
+# --- 1. Generování náhodných údajů (odolné vůči SIGPIPE / Broken pipe pod pipefail) ---
+generate_random_string() {
+    local length="$1"
+    local allowed="$2"
+    local result=""
+    while [ "${#result}" -lt "$length" ]; do
+        local chunk
+        chunk=$(head -c 256 /dev/urandom 2>/dev/null | LC_ALL=C tr -dc "$allowed" 2>/dev/null || true)
+        result="${result}${chunk}"
+    done
+    printf "%s" "${result:0:length}"
+}
+
+RANDOM_SUFFIX=$(generate_random_string 6 "a-z0-9")
+DB_NAME="wp_${SITE_NAME}_${RANDOM_SUFFIX}"
+DB_USER="${SITE_NAME}_${RANDOM_SUFFIX}"
+DB_PASS="Wp9#"$(generate_random_string 20 "A-Za-z0-9!#%*")
+
+# Náhodné salts pro wp-config.php
+generate_salt() {
+    generate_random_string 64 'A-Za-z0-9!#$%&*+,-./:;<=>?@^_~'
+}
+AUTH_KEY=$(generate_salt)
+SECURE_AUTH_KEY=$(generate_salt)
+LOGGED_IN_KEY=$(generate_salt)
+NONCE_KEY=$(generate_salt)
+AUTH_SALT=$(generate_salt)
+SECURE_AUTH_SALT=$(generate_salt)
+LOGGED_IN_SALT=$(generate_salt)
+NONCE_SALT=$(generate_salt)
+
+echo "[1/6] Vygenerována databáze: ${DB_NAME}, uživatel: ${DB_USER}"
+
+# --- 2. Vytvoření DB a uživatele v MySQL Master ---
+echo "[2/6] Připojování k MySQL Master (${MYSQL_HOST}:${MYSQL_PORT:-3306})..."
+
+# Detekce mariadb vs mysql klienta a ignorování self-signed certifikátu v ProxySQL
+if command -v mariadb &>/dev/null; then
+    MYSQL_BIN="mariadb --skip-ssl-verify-server-cert"
+elif mysql --help 2>/dev/null | grep -q "ssl-mode"; then
+    MYSQL_BIN="mysql --ssl-mode=REQUIRED"
+else
+    MYSQL_BIN="mysql --skip-ssl-verify-server-cert"
+fi
+
+MYSQL_CMD="${MYSQL_BIN} -h ${MYSQL_HOST} -P ${MYSQL_PORT:-3306} -u ${MYSQL_USER} -p${MYSQL_PASSWORD} --default-character-set=utf8mb4"
+
+# SQL příkazy pro vytvoření izolované DB a uživatele s omezenými právy pouze k jeho DB
+SQL_CREATE_DB_AND_USER="
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';
+"
+
+if echo "$SQL_CREATE_DB_AND_USER" | $MYSQL_CMD; then
+    echo "  ✓ Databáze i uživatel byli v MySQL Masteru úspěšně vytvořeni."
+else
+    echo "CHYBA: Nepodařilo se vytvořit databázi nebo uživatele v MySQL Master!" >&2
+    exit 1
+fi
+
+# Pokud se připojujeme přes ProxySQL (port 6033), zaregistrujeme nového uživatele i do ProxySQL Admina (port 6032)
+PROXYSQL_PORT="${PROXYSQL_ADMIN_PORT:-6032}"
+PROXYSQL_ADMIN_USER="${PROXYSQL_ADMIN_USER:-admin}"
+PROXYSQL_ADMIN_PASS="${PROXYSQL_ADMIN_PASS:-admin}"
+
+if [ "${MYSQL_PORT:-3306}" = "6033" ] || [ -n "${PROXYSQL_ADMIN_PORT:-}" ]; then
+    echo "  Registrace uživatele '${DB_USER}' do ProxySQL (${MYSQL_HOST}:${PROXYSQL_PORT})..."
+    $MYSQL_BIN -h "${MYSQL_HOST}" -P "${PROXYSQL_PORT}" -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASS}" -e \
+    "INSERT OR REPLACE INTO mysql_users(username, password, default_hostgroup, transaction_persistent) VALUES ('${DB_USER}', '${DB_PASS}', 10, 1); LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;" 2>/dev/null && \
+    echo "  ✓ Uživatel '${DB_USER}' úspěšně zaregistrován v ProxySQL." || \
+    echo "  ℹ Upozornění: Automatický zápis do ProxySQL (port 6032) neprošel (může být řízen sync skriptem)."
+fi
+
+# --- 3. Příprava lokálních souborů a volume ---
+echo "[3/6] Příprava konfiguračních souborů v ${SITE_DIR}..."
+mkdir -p "$SITE_DIR"
+
+# A) Soubor db.env (čtený WordPress kontejnerem z volume)
+cat > "${SITE_DIR}/db.env" << EOF
+DB_NAME=${DB_NAME}
+DB_USER=${DB_USER}
+DB_PASSWORD=${DB_PASS}
+DB_HOST=${MYSQL_HOST}
+DB_PORT=${MYSQL_PORT:-3306}
+SITE_NAME=${SITE_NAME}
+EOF
+chmod 644 "${SITE_DIR}/db.env"
+
+# B) Vlastní wp-config.php s dynamickým načítáním db.env a sub-path routingem
+cat > "${SITE_DIR}/wp-config.php" << 'EOF'
+<?php
+/**
+ * WordPress Konfigurace pro Home-lab Webhosting s podporou sub-path (/web1, /web2)
+ */
+
+// Načtení přihlašovacích údajů z připojeného db.env souboru
+$creds_file = file_exists('/etc/wordpress/db.env') ? '/etc/wordpress/db.env' : (__DIR__ . '/db.env');
+$creds = file_exists($creds_file) ? parse_ini_file($creds_file) : [];
+
+define('DB_NAME',     $creds['DB_NAME']     ?? getenv('WORDPRESS_DB_NAME')     ?? 'wordpress');
+define('DB_USER',     $creds['DB_USER']     ?? getenv('WORDPRESS_DB_USER')     ?? 'wordpress');
+define('DB_PASSWORD', $creds['DB_PASSWORD'] ?? getenv('WORDPRESS_DB_PASSWORD') ?? '');
+define('DB_HOST',     $creds['DB_HOST']     ?? getenv('WORDPRESS_DB_HOST')     ?? '127.0.0.1');
+define('DB_CHARSET',  'utf8mb4');
+define('DB_COLLATE',  '');
+
+$site_name = $creds['SITE_NAME'] ?? basename(__DIR__);
+
+// Detekce protokolu z reverzní proxy
+$proto = 'http';
+if ((isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') ||
+    (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on')) {
+    $proto = 'https';
+    $_SERVER['HTTPS'] = 'on';
+}
+
+$http_host = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+// Dynamické nastavení WP_HOME a WP_SITEURL na sub-path (/web1, /web2 apod.)
+define('WP_HOME',    $proto . '://' . $http_host . '/' . $site_name);
+define('WP_SITEURL', $proto . '://' . $http_host . '/' . $site_name);
+
+// Zajištění existence symlinku /var/www/html/<site_name> -> . pro obsluhu sub-path URL
+if (!empty($site_name) && !file_exists(__DIR__ . '/' . $site_name)) {
+    @symlink('.', __DIR__ . '/' . $site_name);
+}
+
+// Bezpečnostní klíče a soli
+EOF
+
+cat >> "${SITE_DIR}/wp-config.php" << EOF
+define('AUTH_KEY',         '${AUTH_KEY}');
+define('SECURE_AUTH_KEY',  '${SECURE_AUTH_KEY}');
+define('LOGGED_IN_KEY',    '${LOGGED_IN_KEY}');
+define('NONCE_KEY',        '${NONCE_KEY}');
+define('AUTH_SALT',        '${AUTH_SALT}');
+define('SECURE_AUTH_SALT', '${SECURE_AUTH_SALT}');
+define('LOGGED_IN_SALT',   '${LOGGED_IN_SALT}');
+define('NONCE_SALT',       '${NONCE_SALT}');
+EOF
+
+cat >> "${SITE_DIR}/wp-config.php" << 'EOF'
+
+$table_prefix = 'wp_';
+define('WP_DEBUG', false);
+
+// Přímé stahování pluginů/šablon bez FTP dotazu
+define('FS_METHOD', 'direct');
+
+if (!defined('ABSPATH')) {
+    define('ABSPATH', __DIR__ . '/');
+}
+require_once ABSPATH . 'wp-settings.php';
+EOF
+chmod 644 "${SITE_DIR}/wp-config.php"
+
+# C) Soubor .htaccess s RewriteBase pro daný sub-path
+cat > "${SITE_DIR}/.htaccess" << EOF
+# BEGIN WordPress
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /${SITE_NAME}/
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /${SITE_NAME}/index.php [L]
+</IfModule>
+# END WordPress
+EOF
+chmod 644 "${SITE_DIR}/.htaccess"
+
+# --- 4. Aktualizace docker-compose-clients.yml ---
+echo "[4/6] Aktualizace ${CLIENTS_COMPOSE_FILE}..."
+
+if [ ! -f "$CLIENTS_COMPOSE_FILE" ]; then
+    echo "CHYBA: Soubor ${CLIENTS_COMPOSE_FILE} neexistuje!" >&2
+    exit 1
+fi
+
+# Příprava bloku služby pro nový WordPress kontejner
+NEW_SERVICE_BLOCK="  # --- SITE: ${SITE_NAME} ---
+  ${SITE_NAME}-wordpress:
+    image: ${WP_IMAGE}
+    container_name: ${SITE_NAME}-wordpress
+    restart: unless-stopped
+    volumes:
+      - wordpress-${SITE_NAME}-data:/var/www/html
+      - ../data/sites/${SITE_NAME}/db.env:/etc/wordpress/db.env:ro
+      - ../data/sites/${SITE_NAME}/wp-config.php:/var/www/html/wp-config.php
+      - ../data/sites/${SITE_NAME}/.htaccess:/var/www/html/.htaccess
+    networks:
+      - webhosting-network
+  # --- END: ${SITE_NAME} ---"
+
+NEW_VOLUME_BLOCK="  # --- VOL: ${SITE_NAME} ---
+  wordpress-${SITE_NAME}-data:
+  # --- ENDVOL: ${SITE_NAME} ---"
+
+# Vložení služby před značku # --- SITES_END ---
+awk -v block="$NEW_SERVICE_BLOCK" '
+/# --- SITES_END ---/ { print block }
+{ print }
+' "$CLIENTS_COMPOSE_FILE" > "${CLIENTS_COMPOSE_FILE}.tmp" && mv "${CLIENTS_COMPOSE_FILE}.tmp" "$CLIENTS_COMPOSE_FILE"
+
+# Vložení volume před značku # --- VOLUMES_END ---
+awk -v block="$NEW_VOLUME_BLOCK" '
+/# --- VOLUMES_END ---/ { print block }
+{ print }
+' "$CLIENTS_COMPOSE_FILE" > "${CLIENTS_COMPOSE_FILE}.tmp" && mv "${CLIENTS_COMPOSE_FILE}.tmp" "$CLIENTS_COMPOSE_FILE"
+
+echo "  ✓ ${CLIENTS_COMPOSE_FILE} byl úspěšně aktualizován."
+
+# --- 5. Spuštění kontejneru přes Docker Compose ---
+echo "[5/6] Spouštění WordPress kontejneru..."
+
+# Detekce kontejnerového enginu (Docker nebo Podman)
+if command -v docker &>/dev/null; then
+    ENGINE="docker"
+elif command -v podman &>/dev/null; then
+    ENGINE="podman"
+else
+    echo "CHYBA: V systému nebyl nalezen ani 'docker' ani 'podman'!" >&2
+    exit 1
+fi
+
+# Zjištění potřeby sudo (v Podmanu rootless ani ve skupině docker není sudo potřeba)
+if [ "$(id -u)" -eq 0 ] || [ "$ENGINE" = "podman" ] || groups 2>/dev/null | grep -q '\bdocker\b'; then
+    RUN_CMD="${ENGINE}"
+else
+    RUN_CMD="sudo ${ENGINE}"
+fi
+
+# Zajištění existence sdílené sítě
+$RUN_CMD network create webhosting-network 2>/dev/null || true
+
+# Spuštění konkrétní služby přes compose
+if $RUN_CMD compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>/dev/null; then
+    echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes ${ENGINE} compose)."
+elif command -v docker-compose &>/dev/null && sudo docker-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>/dev/null; then
+    echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes docker-compose)."
+elif command -v podman-compose &>/dev/null && podman-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>/dev/null; then
+    echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes podman-compose)."
+else
+    echo "CHYBA: Nepodařilo se spustit kontejner přes Compose (${ENGINE})!" >&2
+    exit 1
+fi
+
+# --- 6. Finální inicializace symlinku a kontrola ---
+echo "[6/6] Inicializace WordPress prostředí a symlinku..."
+sleep 3
+# Vytvoření symlinku /var/www/html/<site_name> -> . přímo v kontejneru
+$RUN_CMD exec "${SITE_NAME}-wordpress" ln -sfn . "/var/www/html/${SITE_NAME}" 2>/dev/null || true
+
+# Zápis do logu
+LOGS_DIR="${PROJECT_ROOT}/data/logs"
+mkdir -p "$LOGS_DIR"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] PROVISIONED: site=${SITE_NAME} db=${DB_NAME} user=${DB_USER} by=$(whoami)" >> "${LOGS_DIR}/provision.log"
+
+echo ""
+echo "======================================================"
+echo "  ✓ Webhosting '${SITE_NAME}' úspěšně vytvořen!"
+echo "======================================================"
+echo "URL adresa:   http://${SERVER_IP:-127.0.0.1}:${ADMIN_PORT:-8080}/${SITE_NAME}/"
+echo "Admin panel:  http://${SERVER_IP:-127.0.0.1}:${ADMIN_PORT:-8080}/${SITE_NAME}/wp-admin/"
+echo "MySQL DB:     ${DB_NAME}"
+echo "MySQL User:   ${DB_USER}"
+echo "Kontejner:    ${SITE_NAME}-wordpress"
+echo "======================================================"
+
+exit 0
+

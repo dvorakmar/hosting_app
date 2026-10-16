@@ -1,0 +1,19 @@
+# ==============================================================================
+# Client WordPress Containers - Docker Compose
+# ==============================================================================
+# Tento soubor je dynamicky spravován skripty provision.sh a deprovision.sh.
+# Zde běží výhradně zákaznické WordPress kontejnery.
+# ==============================================================================
+
+services:
+  # --- SITES_BEGIN ---
+  # --- SITES_END ---
+
+networks:
+  webhosting-network:
+    name: webhosting-network
+    external: true
+
+volumes:
+  # --- VOLUMES_BEGIN ---
+  # --- VOLUMES_END ---

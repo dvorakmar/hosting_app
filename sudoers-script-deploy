@@ -1,0 +1,30 @@
+# ==============================================================================
+# Sudoers konfigurace pro Webhosting Manager
+# Umístění: /etc/sudoers.d/webhosting-manager (nebo /etc/sudoers.d/script-deploy)
+# ==============================================================================
+#
+# POSTUP INSTALACE NA SERVERU:
+# 1. Vytvoření uživatele script-deploy (pokud ještě neexistuje):
+#    sudo useradd -m -s /bin/bash script-deploy
+#    sudo usermod -aG docker script-deploy   # volitelně, pokud má spravovat docker napřímo
+#
+# 2. Nastavení oprávnění pro tento soubor:
+#    sudo cp sudoers-script-deploy /etc/sudoers.d/webhosting-manager
+#    sudo chmod 0440 /etc/sudoers.d/webhosting-manager
+#    sudo visudo -c  # Ověření syntaxe
+#
+# ==============================================================================
+
+# 1. Oprávnění pro lokálního uživatele 'script-deploy':
+# Povoleno výhradně spouštění docker / docker-compose příkazů bez hesla
+script-deploy ALL=(root) NOPASSWD: /usr/bin/docker compose *
+script-deploy ALL=(root) NOPASSWD: /usr/local/bin/docker compose *
+script-deploy ALL=(root) NOPASSWD: /usr/bin/docker-compose *
+script-deploy ALL=(root) NOPASSWD: /usr/local/bin/docker-compose *
+script-deploy ALL=(root) NOPASSWD: /usr/bin/docker *
+script-deploy ALL=(root) NOPASSWD: /usr/local/bin/docker *
+
+# 2. Oprávnění pro webový server (pokud PHP běží jako www-data na hostiteli):
+# Povolí www-data volat výhradně provisioning a deprovisioning skripty jako uživatel script-deploy
+www-data ALL=(script-deploy) NOPASSWD: /opt/own_hosting/scripts/provision.sh *
+www-data ALL=(script-deploy) NOPASSWD: /opt/own_hosting/scripts/deprovision.sh *

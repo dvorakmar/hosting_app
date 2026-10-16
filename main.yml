@@ -1,0 +1,5 @@
+---
+# Hlavní Ansible playbook pro spuštění z kořene projektu
+# Použití: ansible-playbook main.yml
+- import_playbook: admin/playbook.yml
+

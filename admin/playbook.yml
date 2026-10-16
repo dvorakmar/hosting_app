@@ -1,0 +1,104 @@
+---
+# ==============================================================================
+# Ansible Playbook pro Webhosting Manager
+# ==============================================================================
+# Spuštění na cílovém stroji:
+# ansible-playbook admin/playbook.yml
+#
+# Automaticky:
+# 1. Zjistí aktuální cestu k projektu bez nutnosti ji ručně zadávat.
+# 2. Nastaví práva pro skripty a uživatele script-deploy.
+# 3. Vygeneruje /etc/sudoers.d/webhosting-manager s přesnou dynamickou cestou.
+# 4. Vytvoří sdílenou síť 'webhosting-network'.
+# 5. Spustí administrační stack (Nginx + PHP-FPM).
+# ==============================================================================
+
+- name: Inicializace a spuštění Webhosting Manageru
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    # Automaticky vypočítá kořenovou cestu k projektu (o úroveň výš než tento playbook)
+    project_root: "{{ playbook_dir | dirname }}"
+
+  tasks:
+    - name: Zobrazení detekované cesty projektu
+      ansible.builtin.debug:
+        msg: "Projekt byl nalezen v: {{ project_root }}"
+
+    - name: Kontrola přítomnosti kontejnerového enginu (podman nebo docker)
+      ansible.builtin.shell: "command -v podman || command -v docker"
+      register: engine_check
+      changed_when: false
+      failed_when: engine_check.rc != 0
+
+    - name: Nastavení proměnné engine
+      ansible.builtin.set_fact:
+        container_engine: "{{ engine_check.stdout | basename }}"
+
+    - name: Zobrazení zjištěného enginu
+      ansible.builtin.debug:
+        msg: "Použitý kontejnerový engine: {{ container_engine }}"
+
+    - name: Vytvoření uživatele script-deploy
+      ansible.builtin.user:
+        name: script-deploy
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Nastavení spustitelných práv pro provisioning a deprovisioning skripty
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: '0755'
+        state: file
+      with_fileglob:
+        - "{{ project_root }}/scripts/*.sh"
+        - "{{ project_root }}/admin/nginx/*.sh"
+        - "{{ project_root }}/admin/*.sh"
+
+    - name: Vygenerování /etc/sudoers.d/webhosting-manager s dynamickou cestou
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/webhosting-manager
+        mode: '0440'
+        validate: 'visudo -cf %s'
+        content: |
+          # Automaticky vygenerováno pro cestu: {{ project_root }}
+          script-deploy ALL=(root) NOPASSWD: /usr/bin/docker compose *, /usr/local/bin/docker compose *, /usr/bin/docker-compose *, /usr/local/bin/docker-compose *, /usr/bin/docker *, /usr/local/bin/docker *
+          script-deploy ALL=(root) NOPASSWD: /usr/bin/podman compose *, /usr/local/bin/podman compose *, /usr/bin/podman-compose *, /usr/local/bin/podman *
+          www-data ALL=(script-deploy) NOPASSWD: {{ project_root }}/scripts/provision.sh *
+          www-data ALL=(script-deploy) NOPASSWD: {{ project_root }}/scripts/deprovision.sh *
+
+    - name: Aktivace podman.socket (pokud běží na Podmanu)
+      ansible.builtin.systemd:
+        name: podman.socket
+        enabled: true
+        state: started
+      when: container_engine == 'podman'
+      ignore_errors: true
+
+    - name: Vytvoření sdílené sítě 'webhosting-network'
+      ansible.builtin.command: "{{ container_engine }} network create webhosting-network"
+      register: net_res
+      changed_when: net_res.rc == 0
+      failed_when: false
+
+    - name: Spuštění Administračního panelu (Nginx + PHP-FPM)
+      ansible.builtin.shell: |
+        cd "{{ project_root }}/admin"
+        if command -v {{ container_engine }} &>/dev/null && {{ container_engine }} compose version &>/dev/null; then
+          {{ container_engine }} compose -f docker-compose-admin.yml up -d --build
+        elif command -v docker-compose &>/dev/null; then
+          docker-compose -f docker-compose-admin.yml up -d --build
+        elif command -v podman-compose &>/dev/null; then
+          podman-compose -f docker-compose-admin.yml up -d
+        else
+          {{ container_engine }} compose -f docker-compose-admin.yml up -d --build
+        fi
+      register: compose_res
+      changed_when: true
+
+    - name: Závěrečný stav
+      ansible.builtin.debug:
+        msg: "Webhosting Manager byl úspěšně spuštěn na adrese: http://localhost:8080/"
+
