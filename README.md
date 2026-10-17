@@ -4,6 +4,19 @@ Kompletní řešení pro automatizovaný provisioning a správu WordPress webhos
 
 ---
 
+> [!IMPORTANT]
+> ### ⚡ DŮLEŽITÉ: Nastavení oprávnění na serveru (Nutné pro testování!)
+> Aby mohl webový administrační kontejner (běžící pod uživatelem `www-data`) automaticky vytvářet adresáře nových webů a modifikovat klientský compose soubor, spusťte na hostitelském serveru po naklonování projektu:
+> ```bash
+> # 1. Práva pro zápis dat webů a compose souboru:
+> sudo chmod -R 777 /opt/own_hosting/data
+> sudo chmod 666 /opt/own_hosting/clients/docker-compose-clients.yml
+>
+> # 2. Spustitelná práva pro skripty:
+> sudo chmod +x /opt/own_hosting/scripts/*.sh /opt/own_hosting/admin/nginx/*.sh /opt/own_hosting/admin/*.sh
+> ```
+> *(Pokud k instalaci použijete náš připravený skript `./admin/setup.sh` nebo `ansible-playbook admin/playbook.yml`, nastaví se tato práva automaticky).*
+
 ## 📐 1. Architektura systému
 
 ```
