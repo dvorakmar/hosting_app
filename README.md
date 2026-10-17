@@ -12,7 +12,10 @@ Kompletní řešení pro automatizovaný provisioning a správu WordPress webhos
 > sudo chmod -R 777 /opt/own_hosting/data /opt/own_hosting/clients
 > sudo chmod 666 /opt/own_hosting/clients/docker-compose-clients.yml
 >
-> # 2. Spustitelná práva pro skripty:
+> # 2. Přístup k Docker/Podman socketu (pro spouštění klientských kontejnerů):
+> sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
+>
+> # 3. Spustitelná práva pro skripty:
 > sudo chmod +x /opt/own_hosting/scripts/*.sh /opt/own_hosting/admin/nginx/*.sh /opt/own_hosting/admin/*.sh
 > ```
 > *(Pokud k instalaci použijete náš připravený skript `./admin/setup.sh` nebo `ansible-playbook admin/playbook.yml`, nastaví se tato práva automaticky).*

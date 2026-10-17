@@ -334,12 +334,23 @@ if [ "$(id -u)" -eq 0 ]; then
     RUN_CMD="${ENGINE}"
 elif ${ENGINE} ps &>/dev/null; then
     RUN_CMD="${ENGINE}"
-elif command -v sudo &>/dev/null && sudo ${ENGINE} ps &>/dev/null; then
+elif command -v sudo &>/dev/null && sudo -n ${ENGINE} ps &>/dev/null; then
     RUN_CMD="sudo ${ENGINE}"
 elif [ "$ENGINE" = "podman" ]; then
     RUN_CMD="podman"
 else
-    RUN_CMD="sudo ${ENGINE}"
+    # Pokud sudo -n selže (vyžaduje heslo), nesmíme volat sudo v neinteraktivním skriptu.
+    # Spustíme přímo ENGINE bez sudo.
+    RUN_CMD="${ENGINE}"
+fi
+
+# Diagnostická kontrola přístupu k socketu
+if ! $RUN_CMD ps &>/dev/null; then
+    echo "  ⚠ Upozornění: Příkaz '${RUN_CMD} ps' selhal." >&2
+    if [ -e /var/run/docker.sock ]; then
+        echo "    Socket /var/run/docker.sock existuje, ale uživatel '$(whoami)' nemá oprávnění k zápisu." >&2
+        echo "    Rychlá náprava na serveru: sudo chmod 666 /var/run/docker.sock" >&2
+    fi
 fi
 
 # Zajištění existence sdílené sítě
@@ -349,7 +360,7 @@ $RUN_CMD network create webhosting-network 2>/dev/null || true
 COMPOSE_OUT=""
 if COMPOSE_OUT=$($RUN_CMD compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1); then
     echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes ${ENGINE} compose)."
-elif command -v docker-compose &>/dev/null && COMPOSE_OUT=$(sudo docker-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1); then
+elif command -v docker-compose &>/dev/null && COMPOSE_OUT=$($RUN_CMD-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1 || docker-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1); then
     echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes docker-compose)."
 elif command -v podman-compose &>/dev/null && COMPOSE_OUT=$(podman-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1); then
     echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes podman-compose)."

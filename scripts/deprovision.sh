@@ -174,17 +174,18 @@ if [ "$(id -u)" -eq 0 ]; then
     RUN_CMD="${ENGINE}"
 elif ${ENGINE} ps &>/dev/null; then
     RUN_CMD="${ENGINE}"
-elif command -v sudo &>/dev/null && sudo ${ENGINE} ps &>/dev/null; then
+elif command -v sudo &>/dev/null && sudo -n ${ENGINE} ps &>/dev/null; then
     RUN_CMD="sudo ${ENGINE}"
 elif [ "$ENGINE" = "podman" ]; then
     RUN_CMD="podman"
 else
-    RUN_CMD="sudo ${ENGINE}"
+    RUN_CMD="${ENGINE}"
 fi
 
 if [ -f "$CLIENTS_COMPOSE_FILE" ]; then
     $RUN_CMD compose -f "$CLIENTS_COMPOSE_FILE" stop "${SITE_NAME}-wordpress" 2>/dev/null || \
-    sudo docker-compose -f "$CLIENTS_COMPOSE_FILE" stop "${SITE_NAME}-wordpress" 2>/dev/null || \
+    $RUN_CMD-compose -f "$CLIENTS_COMPOSE_FILE" stop "${SITE_NAME}-wordpress" 2>/dev/null || \
+    docker-compose -f "$CLIENTS_COMPOSE_FILE" stop "${SITE_NAME}-wordpress" 2>/dev/null || \
     podman-compose -f "$CLIENTS_COMPOSE_FILE" stop "${SITE_NAME}-wordpress" 2>/dev/null || true
 fi
 
