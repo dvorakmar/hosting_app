@@ -288,17 +288,31 @@ NEW_VOLUME_BLOCK="  # --- VOL: ${SITE_NAME} ---
   wordpress-${SITE_NAME}-data:
   # --- ENDVOL: ${SITE_NAME} ---"
 
+# Vložení služby a volume do compose souboru bezpečně přes /tmp
+TMP_FILE=$(mktemp /tmp/compose.XXXXXX 2>/dev/null || mktemp)
+
 # Vložení služby před značku # --- SITES_END ---
-awk -v block="$NEW_SERVICE_BLOCK" '
+if ! awk -v block="$NEW_SERVICE_BLOCK" '
 /# --- SITES_END ---/ { print block }
 { print }
-' "$CLIENTS_COMPOSE_FILE" > "${CLIENTS_COMPOSE_FILE}.tmp" && mv "${CLIENTS_COMPOSE_FILE}.tmp" "$CLIENTS_COMPOSE_FILE"
+' "$CLIENTS_COMPOSE_FILE" > "$TMP_FILE"; then
+    echo "CHYBA: Nepodařilo se zapsat novou službu do dočasného souboru!" >&2
+    rm -f "$TMP_FILE"
+    exit 1
+fi
+cat "$TMP_FILE" > "$CLIENTS_COMPOSE_FILE"
 
 # Vložení volume před značku # --- VOLUMES_END ---
-awk -v block="$NEW_VOLUME_BLOCK" '
+if ! awk -v block="$NEW_VOLUME_BLOCK" '
 /# --- VOLUMES_END ---/ { print block }
 { print }
-' "$CLIENTS_COMPOSE_FILE" > "${CLIENTS_COMPOSE_FILE}.tmp" && mv "${CLIENTS_COMPOSE_FILE}.tmp" "$CLIENTS_COMPOSE_FILE"
+' "$CLIENTS_COMPOSE_FILE" > "$TMP_FILE"; then
+    echo "CHYBA: Nepodařilo se zapsat volume do dočasného souboru!" >&2
+    rm -f "$TMP_FILE"
+    exit 1
+fi
+cat "$TMP_FILE" > "$CLIENTS_COMPOSE_FILE"
+rm -f "$TMP_FILE"
 
 echo "  ✓ ${CLIENTS_COMPOSE_FILE} byl úspěšně aktualizován."
 
@@ -315,9 +329,15 @@ else
     exit 1
 fi
 
-# Zjištění potřeby sudo (v Podmanu rootless ani ve skupině docker není sudo potřeba)
-if [ "$(id -u)" -eq 0 ] || [ "$ENGINE" = "podman" ] || groups 2>/dev/null | grep -q '\bdocker\b'; then
+# Zjištění, zda potřebujeme sudo pro komunikaci se socketem
+if [ "$(id -u)" -eq 0 ]; then
     RUN_CMD="${ENGINE}"
+elif ${ENGINE} ps &>/dev/null; then
+    RUN_CMD="${ENGINE}"
+elif command -v sudo &>/dev/null && sudo ${ENGINE} ps &>/dev/null; then
+    RUN_CMD="sudo ${ENGINE}"
+elif [ "$ENGINE" = "podman" ]; then
+    RUN_CMD="podman"
 else
     RUN_CMD="sudo ${ENGINE}"
 fi
@@ -325,15 +345,20 @@ fi
 # Zajištění existence sdílené sítě
 $RUN_CMD network create webhosting-network 2>/dev/null || true
 
-# Spuštění konkrétní služby přes compose
-if $RUN_CMD compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>/dev/null; then
+# Spuštění konkrétní služby přes compose s odchycením chybového výstupu
+COMPOSE_OUT=""
+if COMPOSE_OUT=$($RUN_CMD compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1); then
     echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes ${ENGINE} compose)."
-elif command -v docker-compose &>/dev/null && sudo docker-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>/dev/null; then
+elif command -v docker-compose &>/dev/null && COMPOSE_OUT=$(sudo docker-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1); then
     echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes docker-compose)."
-elif command -v podman-compose &>/dev/null && podman-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>/dev/null; then
+elif command -v podman-compose &>/dev/null && COMPOSE_OUT=$(podman-compose -f "$CLIENTS_COMPOSE_FILE" up -d "${SITE_NAME}-wordpress" 2>&1); then
     echo "  ✓ Kontejner ${SITE_NAME}-wordpress byl spuštěn (přes podman-compose)."
 else
     echo "CHYBA: Nepodařilo se spustit kontejner přes Compose (${ENGINE})!" >&2
+    if [ -n "$COMPOSE_OUT" ]; then
+        echo "Výstup Compose:" >&2
+        echo "$COMPOSE_OUT" >&2
+    fi
     exit 1
 fi
 

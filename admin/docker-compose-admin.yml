@@ -50,7 +50,7 @@ services:
       ADMIN_DB_PASSWORD: "${ADMIN_DB_PASSWORD}"
       SERVER_IP: "${SERVER_IP:-192.168.1.100}"
       ADMIN_PORT: "${ADMIN_PORT:-8080}"
-      PROJECT_ROOT: "/workspace"
+      PROJECT_ROOT: "/opt/own_hosting"
     healthcheck:
       test: ["CMD-SHELL", "php-fpm -t || exit 1"]
       interval: 10s

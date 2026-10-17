@@ -67,6 +67,7 @@
         - { path: "{{ project_root }}/data/sites", mode: '0777' }
         - { path: "{{ project_root }}/data/logs", mode: '0777' }
         - { path: "{{ project_root }}/data", mode: '0777', recurse: true }
+        - { path: "{{ project_root }}/clients", mode: '0777', recurse: true }
         - { path: "{{ project_root }}/clients/docker-compose-clients.yml", mode: '0666', state: 'file' }
 
     - name: Vygenerování /etc/sudoers.d/webhosting-manager s dynamickou cestou

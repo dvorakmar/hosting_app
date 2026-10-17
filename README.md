@@ -9,7 +9,7 @@ Kompletní řešení pro automatizovaný provisioning a správu WordPress webhos
 > Aby mohl webový administrační kontejner (běžící pod uživatelem `www-data`) automaticky vytvářet adresáře nových webů a modifikovat klientský compose soubor, spusťte na hostitelském serveru po naklonování projektu:
 > ```bash
 > # 1. Práva pro zápis dat webů a compose souboru:
-> sudo chmod -R 777 /opt/own_hosting/data
+> sudo chmod -R 777 /opt/own_hosting/data /opt/own_hosting/clients
 > sudo chmod 666 /opt/own_hosting/clients/docker-compose-clients.yml
 >
 > # 2. Spustitelná práva pro skripty:

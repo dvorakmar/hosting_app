@@ -170,8 +170,14 @@ else
     exit 1
 fi
 
-if [ "$(id -u)" -eq 0 ] || [ "$ENGINE" = "podman" ] || groups 2>/dev/null | grep -q '\bdocker\b'; then
+if [ "$(id -u)" -eq 0 ]; then
     RUN_CMD="${ENGINE}"
+elif ${ENGINE} ps &>/dev/null; then
+    RUN_CMD="${ENGINE}"
+elif command -v sudo &>/dev/null && sudo ${ENGINE} ps &>/dev/null; then
+    RUN_CMD="sudo ${ENGINE}"
+elif [ "$ENGINE" = "podman" ]; then
+    RUN_CMD="podman"
 else
     RUN_CMD="sudo ${ENGINE}"
 fi
@@ -194,11 +200,13 @@ echo "  ✓ Volume wordpress-${SITE_NAME}-data odstraněn."
 echo "[5/6] Úprava ${CLIENTS_COMPOSE_FILE}..."
 
 if [ -f "$CLIENTS_COMPOSE_FILE" ]; then
-    # Spolehlivé odstranění bloku služby a volume pomocí sed
-    sed -i.bak "/# --- SITE: ${SITE_NAME} ---/,/# --- END: ${SITE_NAME} ---/d" "$CLIENTS_COMPOSE_FILE" 2>/dev/null || true
-    sed -i.bak "/# --- VOL: ${SITE_NAME} ---/,/# --- ENDVOL: ${SITE_NAME} ---/d" "$CLIENTS_COMPOSE_FILE" 2>/dev/null || true
-    rm -f "${CLIENTS_COMPOSE_FILE}.bak"
-    echo "  ✓ Služba odstraněna z docker-compose-clients.yml."
+    TMP_FILE=$(mktemp /tmp/compose.XXXXXX 2>/dev/null || mktemp)
+    if sed "/# --- SITE: ${SITE_NAME} ---/,/# --- END: ${SITE_NAME} ---/d" "$CLIENTS_COMPOSE_FILE" | \
+       sed "/# --- VOL: ${SITE_NAME} ---/,/# --- ENDVOL: ${SITE_NAME} ---/d" > "$TMP_FILE"; then
+        cat "$TMP_FILE" > "$CLIENTS_COMPOSE_FILE"
+        echo "  ✓ Služba odstraněna z docker-compose-clients.yml."
+    fi
+    rm -f "$TMP_FILE"
 fi
 
 # --- Krok 6: Odstranění lokální složky a zápis do logu ---
