@@ -5,10 +5,11 @@
 
 // Načtení .env souboru, pokud existuje v kořeni projektu nebo v kontejneru
 function load_env_file() {
-    $paths = ['/workspace/.env', '/.env', __DIR__ . '/../.env'];
+    $paths = ['/workspace/.env', '/.env', dirname(__DIR__) . '/.env', __DIR__ . '/../.env'];
     foreach ($paths as $path) {
-        if (file_exists($path)) {
+        if (is_file($path) && is_readable($path)) {
             $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            if ($lines === false) continue;
             foreach ($lines as $line) {
                 if (strpos(trim($line), '#') === 0) continue;
                 if (strpos($line, '=') === false) continue;

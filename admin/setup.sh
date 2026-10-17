@@ -35,7 +35,17 @@ else
 fi
 echo "Detekovaný kontejnerový engine: ${ENGINE}"
 
-# 2. Nastavení spustitelných práv pro skripty
+# 2. Kontrola .env souboru (oprava pokud byl vytvořen Dockerem/Podmanem jako adresář)
+if [ -d "${PROJECT_ROOT}/.env" ]; then
+    echo "  Oprava: ${PROJECT_ROOT}/.env byl vytvořen jako adresář. Nahrazuji souborem z .env.example..."
+    rm -rf "${PROJECT_ROOT}/.env"
+    cp "${PROJECT_ROOT}/.env.example" "${PROJECT_ROOT}/.env"
+elif [ ! -f "${PROJECT_ROOT}/.env" ] && [ -f "${PROJECT_ROOT}/.env.example" ]; then
+    echo "  Vytváření .env z .env.example..."
+    cp "${PROJECT_ROOT}/.env.example" "${PROJECT_ROOT}/.env"
+fi
+
+# 3. Nastavení spustitelných práv pro skripty
 echo "[1/4] Nastavování práv pro skripty..."
 chmod +x "${PROJECT_ROOT}/scripts/"*.sh 2>/dev/null || true
 chmod +x "${PROJECT_ROOT}/admin/nginx/"*.sh 2>/dev/null || true
