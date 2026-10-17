@@ -18,25 +18,42 @@ set -euo pipefail
 
 # --- Zjištění cest ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ENV_FILE="${PROJECT_ROOT}/.env"
 
-# --- Načtení proměnných z .env ---
-if [ ! -f "$ENV_FILE" ]; then
-    echo "CHYBA: Soubor .env nebyl nalezen v ${ENV_FILE}" >&2
-    exit 1
+# Detekce kořenového adresáře projektu (na hostiteli i v kontejneru)
+if [ -n "${PROJECT_ROOT:-}" ] && [ -d "${PROJECT_ROOT}" ] && [ "${PROJECT_ROOT}" != "/" ]; then
+    PROJECT_ROOT="${PROJECT_ROOT}"
+elif [ "$SCRIPT_DIR" = "/scripts" ]; then
+    if [ -d "/opt/own_hosting" ]; then
+        PROJECT_ROOT="/opt/own_hosting"
+    elif [ -d "/workspace" ]; then
+        PROJECT_ROOT="/workspace"
+    else
+        PROJECT_ROOT=""
+    fi
+else
+    PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
 
-while IFS='=' read -r key value || [ -n "$key" ]; do
-    [[ "$key" =~ ^[[:space:]]*# ]] && continue
-    [[ -z "$key" ]] && continue
-    key=$(echo "$key" | tr -d '[:space:]')
-    value=$(echo "$value" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//" | sed "s/^[\"']//;s/[\"']$//")
-    export "$key=$value" 2>/dev/null || true
-done < "$ENV_FILE"
+if [ -n "$PROJECT_ROOT" ]; then
+    ENV_FILE="${PROJECT_ROOT}/.env"
+    SITES_DIR="${PROJECT_ROOT}/data/sites"
+    CLIENTS_COMPOSE_FILE="${PROJECT_ROOT}/clients/docker-compose-clients.yml"
+else
+    ENV_FILE="/.env"
+    SITES_DIR="/data/sites"
+    CLIENTS_COMPOSE_FILE="/clients/docker-compose-clients.yml"
+fi
 
-# Zaručení, že PROJECT_ROOT vždy odpovídá reálnému umístění projektu (i po načtení .env)
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# --- Načtení proměnných z .env ---
+if [ -f "$ENV_FILE" ]; then
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        key=$(echo "$key" | tr -d '[:space:]')
+        value=$(echo "$value" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//" | sed "s/^[\"']//;s/[\"']$//")
+        export "$key=$value" 2>/dev/null || true
+    done < "$ENV_FILE"
+fi
 
 # --- Validace argumentu ---
 if [ $# -lt 1 ]; then
@@ -57,9 +74,8 @@ echo "======================================================"
 echo "  Zahájení Deprovisioningu (BEZPEČNÝ REŽIM): ${SITE_NAME}"
 echo "======================================================"
 
-SITES_DIR="${PROJECT_ROOT}/data/sites"
 SITE_DIR="${SITES_DIR}/${SITE_NAME}"
-CLIENTS_COMPOSE_FILE="${PROJECT_ROOT}/clients/docker-compose-clients.yml"
+CLIENTS_COMPOSE_FILE="${PROJECT_ROOT:-}/clients/docker-compose-clients.yml"
 
 # --- Krok 1: Zjištění DB jména a DB uživatele ---
 echo "[1/6] Vyhledávání databázových údajů pro '${SITE_NAME}'..."

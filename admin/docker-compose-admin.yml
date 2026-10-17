@@ -32,6 +32,7 @@ services:
     restart: unless-stopped
     volumes:
       - ../admin-web:/var/www/html:rw
+      - ..:/opt/own_hosting:rw
       - ../scripts:/scripts:ro
       - ../clients:/clients:rw
       - ../data:/data:rw

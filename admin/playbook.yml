@@ -57,6 +57,18 @@
         - "{{ project_root }}/admin/nginx/*.sh"
         - "{{ project_root }}/admin/*.sh"
 
+    - name: Zajištění adresářů a zápisových práv pro data a clients
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+        state: "{{ item.state | default('directory') }}"
+        recurse: "{{ item.recurse | default(false) }}"
+      loop:
+        - { path: "{{ project_root }}/data/sites", mode: '0777' }
+        - { path: "{{ project_root }}/data/logs", mode: '0777' }
+        - { path: "{{ project_root }}/data", mode: '0777', recurse: true }
+        - { path: "{{ project_root }}/clients/docker-compose-clients.yml", mode: '0666', state: 'file' }
+
     - name: Vygenerování /etc/sudoers.d/webhosting-manager s dynamickou cestou
       ansible.builtin.copy:
         dest: /etc/sudoers.d/webhosting-manager
