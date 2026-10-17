@@ -34,17 +34,10 @@ else
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
 
-if [ -n "$PROJECT_ROOT" ]; then
-    ENV_FILE="${PROJECT_ROOT}/.env"
-    SITES_DIR="${PROJECT_ROOT}/data/sites"
-    CLIENTS_COMPOSE_FILE="${PROJECT_ROOT}/clients/docker-compose-clients.yml"
-else
-    ENV_FILE="/.env"
-    SITES_DIR="/data/sites"
-    CLIENTS_COMPOSE_FILE="/clients/docker-compose-clients.yml"
-fi
-
 # --- Načtení proměnných z .env ---
+ENV_FILE="${PROJECT_ROOT}/.env"
+[ -f "$ENV_FILE" ] || ENV_FILE="/.env"
+
 if [ -f "$ENV_FILE" ]; then
     while IFS='=' read -r key value || [ -n "$key" ]; do
         [[ "$key" =~ ^[[:space:]]*# ]] && continue
@@ -53,6 +46,15 @@ if [ -f "$ENV_FILE" ]; then
         value=$(echo "$value" | sed "s/^[[:space:]]*//;s/[[:space:]]*$//" | sed "s/^[\"']//;s/[\"']$//")
         export "$key=$value" 2>/dev/null || true
     done < "$ENV_FILE"
+fi
+
+# Zaručení absolutních platných cest odvozených z PROJECT_ROOT (nepřepsatelných z .env)
+if [ -n "$PROJECT_ROOT" ]; then
+    SITES_DIR="${PROJECT_ROOT}/data/sites"
+    CLIENTS_COMPOSE_FILE="${PROJECT_ROOT}/clients/docker-compose-clients.yml"
+else
+    SITES_DIR="/data/sites"
+    CLIENTS_COMPOSE_FILE="/clients/docker-compose-clients.yml"
 fi
 
 # --- Validace argumentu ---
