@@ -46,9 +46,11 @@ fi
 if [ -n "$PROJECT_ROOT" ]; then
     SITES_DIR="${PROJECT_ROOT}/data/sites"
     CLIENTS_COMPOSE_FILE="${PROJECT_ROOT}/clients/docker-compose-clients.yml"
+    WP_SOURCE_DIR="${PROJECT_ROOT}/data/wordpress-source"
 else
     SITES_DIR="/data/sites"
     CLIENTS_COMPOSE_FILE="/clients/docker-compose-clients.yml"
+    WP_SOURCE_DIR="/data/wordpress-source"
 fi
 
 # --- Validace argumentu ---
@@ -161,8 +163,23 @@ if [ "${MYSQL_PORT:-3306}" = "6033" ] || [ -n "${PROXYSQL_ADMIN_PORT:-}" ]; then
     fi
 fi
 
-# --- 3. Příprava lokálních souborů a volume ---
-echo "[3/6] Příprava konfiguračních souborů v ${SITE_DIR}..."
+# --- 3. Příprava lokálních souborů a WordPress instalace ---
+echo "[3/6] Příprava WordPress souborů a konfigurace pro ${SITE_NAME}..."
+
+# Zajištění zdrojové šablony WordPressu (WP_SOURCE_DIR)
+mkdir -p "$WP_SOURCE_DIR"
+if [ ! -f "${WP_SOURCE_DIR}/index.php" ]; then
+    echo "  ℹ Zdrojová instalace WordPressu v ${WP_SOURCE_DIR} nenalezena."
+    echo "  Stahuji oficiální WordPress (cs_CZ) do šablony ${WP_SOURCE_DIR}..."
+    curl -sSL "https://cs.wordpress.org/latest-cs_CZ.tar.gz" 2>/dev/null | tar -xz -C "${WP_SOURCE_DIR}" --strip-components=1 2>/dev/null || \
+    curl -sSL "https://wordpress.org/latest.tar.gz" 2>/dev/null | tar -xz -C "${WP_SOURCE_DIR}" --strip-components=1 2>/dev/null || true
+
+    if [ -f "${WP_SOURCE_DIR}/index.php" ]; then
+        echo "  ✓ Zdrojový WordPress úspěšně stažen a připraven v ${WP_SOURCE_DIR}"
+    else
+        echo "  ⚠ Upozornění: Automatické stažení se nezdařilo. Umístěte WordPress soubory do ${WP_SOURCE_DIR}" >&2
+    fi
+fi
 
 # Ověření oprávnění k zápisu
 if [ ! -d "$SITES_DIR" ]; then
@@ -170,12 +187,21 @@ if [ ! -d "$SITES_DIR" ]; then
 fi
 if [ ! -w "$SITES_DIR" ]; then
     echo "CHYBA: Adresář '${SITES_DIR}' není zapisovatelný pro uživatele '$(whoami)'." >&2
-    echo "Na hostitelském serveru prosím spusťte: sudo chmod -R 777 ${PROJECT_ROOT:-/opt/own_hosting}/data" >&2
+    echo "Na hostitelském serveru prosím spusťte: chmod -R 775 ${PROJECT_ROOT:-/opt/own_hosting}/data" >&2
     exit 1
 fi
-mkdir -p "$SITE_DIR"
 
-# A) Soubor db.env (čtený WordPress kontejnerem z volume)
+SITE_DIR="${SITES_DIR}/${SITE_NAME}"
+SITE_HTML_DIR="${SITE_DIR}/html"
+mkdir -p "$SITE_HTML_DIR"
+
+# Zkopírování WordPress souborů ze zdrojové šablony do webu
+if [ -d "$WP_SOURCE_DIR" ] && [ -f "${WP_SOURCE_DIR}/index.php" ]; then
+    echo "  Kopírování WordPressu ze zdroje (${WP_SOURCE_DIR}) do ${SITE_HTML_DIR}..."
+    cp -a "${WP_SOURCE_DIR}/." "${SITE_HTML_DIR}/"
+fi
+
+# A) Soubor db.env (čtený kontejnerem z bind-mountu)
 cat > "${SITE_DIR}/db.env" << EOF
 DB_NAME="${DB_NAME}"
 DB_USER="${DB_USER}"
@@ -187,14 +213,14 @@ EOF
 chmod 644 "${SITE_DIR}/db.env"
 
 # B) Vlastní wp-config.php s dynamickým načítáním db.env a sub-path routingem
-cat > "${SITE_DIR}/wp-config.php" << 'EOF'
+cat > "${SITE_HTML_DIR}/wp-config.php" << 'EOF'
 <?php
 /**
  * WordPress Konfigurace pro Home-lab Webhosting s podporou sub-path (/web1, /web2)
  */
 
 // Načtení přihlašovacích údajů z připojeného db.env souboru
-$creds_file = file_exists('/etc/wordpress/db.env') ? '/etc/wordpress/db.env' : (__DIR__ . '/db.env');
+$creds_file = file_exists('/etc/wordpress/db.env') ? '/etc/wordpress/db.env' : (__DIR__ . '/../db.env');
 $creds = [];
 if (file_exists($creds_file)) {
     $lines = file($creds_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
@@ -221,7 +247,7 @@ define('DB_HOST',     $db_host);
 define('DB_CHARSET',  'utf8mb4');
 define('DB_COLLATE',  '');
 
-$site_name = $creds['SITE_NAME'] ?? basename(__DIR__);
+$site_name = $creds['SITE_NAME'] ?? basename(dirname(__DIR__));
 
 // Detekce protokolu z reverzní proxy
 $proto = 'http';
@@ -248,7 +274,7 @@ if (isset($_SERVER['HTTP_X_FORWARDED_PREFIX'])) {
 // Bezpečnostní klíče a soli
 EOF
 
-cat >> "${SITE_DIR}/wp-config.php" << EOF
+cat >> "${SITE_HTML_DIR}/wp-config.php" << EOF
 define('AUTH_KEY',         '${AUTH_KEY}');
 define('SECURE_AUTH_KEY',  '${SECURE_AUTH_KEY}');
 define('LOGGED_IN_KEY',    '${LOGGED_IN_KEY}');
@@ -259,7 +285,7 @@ define('LOGGED_IN_SALT',   '${LOGGED_IN_SALT}');
 define('NONCE_SALT',       '${NONCE_SALT}');
 EOF
 
-cat >> "${SITE_DIR}/wp-config.php" << 'EOF'
+cat >> "${SITE_HTML_DIR}/wp-config.php" << 'EOF'
 
 $table_prefix = 'wp_';
 define('WP_DEBUG', false);
@@ -272,10 +298,11 @@ if (!defined('ABSPATH')) {
 }
 require_once ABSPATH . 'wp-settings.php';
 EOF
-chmod 644 "${SITE_DIR}/wp-config.php"
+chmod 644 "${SITE_HTML_DIR}/wp-config.php"
+cp -f "${SITE_HTML_DIR}/wp-config.php" "${SITE_DIR}/wp-config.php" 2>/dev/null || true
 
 # C) Soubor .htaccess se standardním WordPress přepisem
-cat > "${SITE_DIR}/.htaccess" << EOF
+cat > "${SITE_HTML_DIR}/.htaccess" << EOF
 # BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
@@ -287,7 +314,11 @@ RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress
 EOF
-chmod 644 "${SITE_DIR}/.htaccess"
+chmod 644 "${SITE_HTML_DIR}/.htaccess"
+cp -f "${SITE_HTML_DIR}/.htaccess" "${SITE_DIR}/.htaccess" 2>/dev/null || true
+
+# Zajištění zápisových práv pro kontejner (uploads, plugins apod.)
+chmod -R a+rwX "${SITE_HTML_DIR}" 2>/dev/null || true
 
 # --- 4. Aktualizace docker-compose-clients.yml ---
 echo "[4/6] Aktualizace ${CLIENTS_COMPOSE_FILE}..."
@@ -297,26 +328,20 @@ if [ ! -f "$CLIENTS_COMPOSE_FILE" ]; then
     exit 1
 fi
 
-# Příprava bloku služby pro nový WordPress kontejner
+# Příprava bloku služby pro nový WordPress kontejner (přímý bind-mount složky html)
 NEW_SERVICE_BLOCK="  # --- SITE: ${SITE_NAME} ---
   ${SITE_NAME}-wordpress:
     image: ${WP_IMAGE}
     container_name: ${SITE_NAME}-wordpress
     restart: unless-stopped
     volumes:
-      - wordpress-${SITE_NAME}-data:/var/www/html
+      - ../data/sites/${SITE_NAME}/html:/var/www/html:rw
       - ../data/sites/${SITE_NAME}/db.env:/etc/wordpress/db.env:ro
-      - ../data/sites/${SITE_NAME}/wp-config.php:/var/www/html/wp-config.php
-      - ../data/sites/${SITE_NAME}/.htaccess:/var/www/html/.htaccess
     networks:
       - webhosting-network
   # --- END: ${SITE_NAME} ---"
 
-NEW_VOLUME_BLOCK="  # --- VOL: ${SITE_NAME} ---
-  wordpress-${SITE_NAME}-data:
-  # --- ENDVOL: ${SITE_NAME} ---"
-
-# Vložení služby a volume do compose souboru bezpečně přes /tmp
+# Vložení služby do compose souboru bezpečně přes /tmp
 TMP_FILE=$(mktemp /tmp/compose.XXXXXX 2>/dev/null || mktemp)
 
 # Vložení služby před značku # --- SITES_END ---
@@ -325,17 +350,6 @@ if ! awk -v block="$NEW_SERVICE_BLOCK" '
 { print }
 ' "$CLIENTS_COMPOSE_FILE" > "$TMP_FILE"; then
     echo "CHYBA: Nepodařilo se zapsat novou službu do dočasného souboru!" >&2
-    rm -f "$TMP_FILE"
-    exit 1
-fi
-cat "$TMP_FILE" > "$CLIENTS_COMPOSE_FILE"
-
-# Vložení volume před značku # --- VOLUMES_END ---
-if ! awk -v block="$NEW_VOLUME_BLOCK" '
-/# --- VOLUMES_END ---/ { print block }
-{ print }
-' "$CLIENTS_COMPOSE_FILE" > "$TMP_FILE"; then
-    echo "CHYBA: Nepodařilo se zapsat volume do dočasného souboru!" >&2
     rm -f "$TMP_FILE"
     exit 1
 fi

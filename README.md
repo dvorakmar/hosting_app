@@ -88,9 +88,14 @@ own_hosting/
 │   └── deprovision.sh                # Zabezpečený skript pro smazání WordPressu a DB
 └── data/
     ├── init-mysql.sql                # SQL inicializace uživatelů a tabulek
-    ├── sites/                        # Složky klientských webů (db.env, wp-config, htaccess)
+    ├── wordpress-source/             # Zdrojová šablona WordPressu (zde máte plnou kontrolu nad verzí)
+    ├── sites/                        # Složky klientských webů (html soubory, db.env, wp-config)
     └── logs/                         # Auditní logy operací (provision.log, deprovision.log)
 ```
+
+> [!TIP]
+> ### 📦 Kontrola nad verzí WordPressu (`data/wordpress-source`)
+> Do složky `/opt/own_hosting/data/wordpress-source` můžete kdykoliv nahrát jakoukoliv verzi WordPressu (včetně předinstalovaných pluginů, šablon nebo lokalizace). Pokud je složka při prvním spuštění prázdná, skript `provision.sh` do ní automaticky stáhne oficiální český WordPress. Každý nově vytvořený web se nakopíruje přímo z této šablony do `/opt/own_hosting/data/sites/<web>/html`.
 
 ---
 

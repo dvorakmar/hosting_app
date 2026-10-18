@@ -51,10 +51,10 @@ chmod +x "${PROJECT_ROOT}/scripts/"*.sh 2>/dev/null || true
 chmod +x "${PROJECT_ROOT}/admin/nginx/"*.sh 2>/dev/null || true
 
 # Nastavení zápisových práv pro data a clients (aby kontejner mohl vytvářet weby)
-mkdir -p "${PROJECT_ROOT}/data/sites" "${PROJECT_ROOT}/data/logs"
-chmod -R 777 "${PROJECT_ROOT}/data" 2>/dev/null || true
-chmod -R 777 "${PROJECT_ROOT}/clients" 2>/dev/null || true
-chmod 666 "${PROJECT_ROOT}/clients/docker-compose-clients.yml" 2>/dev/null || true
+mkdir -p "${PROJECT_ROOT}/data/sites" "${PROJECT_ROOT}/data/logs" "${PROJECT_ROOT}/data/wordpress-source"
+chmod -R 775 "${PROJECT_ROOT}/data" 2>/dev/null || chmod -R 777 "${PROJECT_ROOT}/data" 2>/dev/null || true
+chmod -R 775 "${PROJECT_ROOT}/clients" 2>/dev/null || chmod -R 777 "${PROJECT_ROOT}/clients" 2>/dev/null || true
+chmod 664 "${PROJECT_ROOT}/clients/docker-compose-clients.yml" 2>/dev/null || chmod 666 "${PROJECT_ROOT}/clients/docker-compose-clients.yml" 2>/dev/null || true
 [ -e /var/run/docker.sock ] && (chmod 666 /var/run/docker.sock 2>/dev/null || sudo chmod 666 /var/run/docker.sock 2>/dev/null || true)
 
 # 3. Instalace sudoers s dynamicky vygenerovanou cestou (pokud máme root/sudo)
