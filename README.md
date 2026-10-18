@@ -5,20 +5,29 @@ Kompletní řešení pro automatizovaný provisioning a správu WordPress webhos
 ---
 
 > [!IMPORTANT]
-> ### ⚡ DŮLEŽITÉ: Nastavení oprávnění na serveru (Nutné pro testování!)
-> Aby mohl webový administrační kontejner (běžící pod uživatelem `www-data`) automaticky vytvářet adresáře nových webů a modifikovat klientský compose soubor, spusťte na hostitelském serveru po naklonování projektu:
+> ### ⚡ DŮLEŽITÉ: Nastavení oprávnění & Rootless Podman (Bezpečný provoz)
+> Pro maximální bezpečnost provozujte systém v **Rootless Podmanu** (kontejnery běží bez jakýchkoliv root práv na hostitelském serveru):
+>
+> **1. Aktivace Rootless Podman socketu (na hostiteli):**
 > ```bash
-> # 1. Práva pro zápis dat webů a compose souboru:
-> sudo chmod -R 777 /opt/own_hosting/data /opt/own_hosting/clients
-> sudo chmod 666 /opt/own_hosting/clients/docker-compose-clients.yml
->
-> # 2. Přístup k Docker/Podman socketu (pro spouštění klientských kontejnerů):
-> sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
->
-> # 3. Spustitelná práva pro skripty:
-> sudo chmod +x /opt/own_hosting/scripts/*.sh /opt/own_hosting/admin/nginx/*.sh /opt/own_hosting/admin/*.sh
+> systemctl --user enable --now podman.socket
+> loginctl enable-linger $USER
 > ```
-> *(Pokud k instalaci použijete náš připravený skript `./admin/setup.sh` nebo `ansible-playbook admin/playbook.yml`, nastaví se tato práva automaticky).*
+> *Tento příkaz vytvoří bezpečný uživatelský socket v `/run/user/$(id -u)/podman/podman.sock`.*
+>
+> **2. Nastavení proměnné v `.env`:**
+> ```bash
+> # Do .env doplňte cestu k vašemu uživatelskému socketu:
+> echo "DOCKER_SOCK=/run/user/$(id -u)/podman/podman.sock" >> /opt/own_hosting/.env
+> ```
+>
+> **3. Běžná práva (není potřeba sudo, pokud jste vlastníkem složky):**
+> ```bash
+> chmod -R 775 /opt/own_hosting/data /opt/own_hosting/clients
+> chmod 664 /opt/own_hosting/clients/docker-compose-clients.yml
+> chmod +x /opt/own_hosting/scripts/*.sh /opt/own_hosting/admin/nginx/*.sh /opt/own_hosting/admin/*.sh
+> ```
+> *(Pokud spustíte náš skript `./admin/setup.sh`, detekuje Rootless Podman socket a nastaví vše automaticky).*
 
 ## 📐 1. Architektura systému
 

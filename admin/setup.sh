@@ -83,14 +83,34 @@ else
     echo "  ⚠ Spuštěno bez roota: sudoers můžete nastavit ručně ze souboru ${PROJECT_ROOT}/sudoers-script-deploy"
 fi
 
-# 4. Zajištění existence sdílené sítě
-echo "[3/4] Kontrola sítě 'webhosting-network'..."
+# 4. Detekce a konfigurace kontejnerového socketu a sítě
+echo "[3/4] Konfigurace kontejnerového socketu a sítě..."
 if [ "$ENGINE" = "podman" ]; then
-    podman network exists webhosting-network 2>/dev/null || podman network create webhosting-network 2>/dev/null || true
-    # Pokud běží systémový podman socket, zapneme jej
-    if [ "$(id -u)" -eq 0 ] && systemctl list-unit-files | grep -q "podman.socket"; then
-        systemctl enable --now podman.socket 2>/dev/null || true
+    USER_ID=$(id -u)
+    if [ "$USER_ID" -ne 0 ]; then
+        echo "  ℹ Detekován Rootless Podman (uživatel: $(whoami), UID: ${USER_ID})"
+        # Aktivace user systemd socketu pro rootless režim
+        systemctl --user enable --now podman.socket 2>/dev/null || true
+        loginctl enable-linger 2>/dev/null || true
+
+        PODMAN_SOCK="${XDG_RUNTIME_DIR:-/run/user/${USER_ID}}/podman/podman.sock"
+        if [ -S "$PODMAN_SOCK" ] || systemctl --user is-active --quiet podman.socket 2>/dev/null; then
+            echo "  ✓ Aktivní Rootless Podman socket: ${PODMAN_SOCK}"
+            export DOCKER_SOCK="$PODMAN_SOCK"
+            if [ -f "${PROJECT_ROOT}/.env" ]; then
+                if grep -q "^DOCKER_SOCK=" "${PROJECT_ROOT}/.env"; then
+                    sed -i "s|^DOCKER_SOCK=.*|DOCKER_SOCK=${PODMAN_SOCK}|" "${PROJECT_ROOT}/.env"
+                else
+                    echo "DOCKER_SOCK=${PODMAN_SOCK}" >> "${PROJECT_ROOT}/.env"
+                fi
+            fi
+        fi
+    else
+        if systemctl list-unit-files 2>/dev/null | grep -q "podman.socket"; then
+            systemctl enable --now podman.socket 2>/dev/null || true
+        fi
     fi
+    podman network exists webhosting-network 2>/dev/null || podman network create webhosting-network 2>/dev/null || true
 else
     docker network inspect webhosting-network &>/dev/null || docker network create webhosting-network 2>/dev/null || true
 fi

@@ -37,7 +37,7 @@ services:
       - ../clients:/clients:rw
       - ../data:/data:rw
       - ../.env:/.env:ro
-      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:rw
     environment:
       MYSQL_HOST: "${MYSQL_HOST:-127.0.0.1}"
       MYSQL_PORT: "${MYSQL_PORT:-3306}"
