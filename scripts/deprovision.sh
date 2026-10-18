@@ -151,8 +151,11 @@ if [ -n "$DB_NAME" ]; then
 
     if [ "${MYSQL_PORT}" = "6033" ] || [ -n "${PROXYSQL_ADMIN_PORT:-}" ]; then
         if [ -n "$DB_USER" ]; then
-            $MYSQL_BIN -h "${MYSQL_HOST}" -P "${PROXYSQL_PORT}" -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASS}" -e \
-            "DELETE FROM mysql_users WHERE username='${DB_USER}'; LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;" 2>/dev/null || true
+            PROXY_CMD="mariadb -h ${MYSQL_HOST} -P ${PROXYSQL_PORT} -u ${PROXYSQL_ADMIN_USER} -p${PROXYSQL_ADMIN_PASS} --skip-ssl"
+            if ! command -v mariadb &>/dev/null; then
+                PROXY_CMD="mysql -h ${MYSQL_HOST} -P ${PROXYSQL_PORT} -u ${PROXYSQL_ADMIN_USER} -p${PROXYSQL_ADMIN_PASS} --skip-ssl"
+            fi
+            $PROXY_CMD -e "DELETE FROM mysql_users WHERE username='${DB_USER}'; LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;" 2>/dev/null || true
         fi
     fi
 fi

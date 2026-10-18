@@ -147,10 +147,18 @@ PROXYSQL_ADMIN_PASS="${PROXYSQL_ADMIN_PASS:-admin}"
 
 if [ "${MYSQL_PORT:-3306}" = "6033" ] || [ -n "${PROXYSQL_ADMIN_PORT:-}" ]; then
     echo "  Registrace uživatele '${DB_USER}' do ProxySQL (${MYSQL_HOST}:${PROXYSQL_PORT})..."
-    $MYSQL_BIN -h "${MYSQL_HOST}" -P "${PROXYSQL_PORT}" -u "${PROXYSQL_ADMIN_USER}" -p"${PROXYSQL_ADMIN_PASS}" -e \
-    "INSERT OR REPLACE INTO mysql_users(username, password, default_hostgroup, transaction_persistent) VALUES ('${DB_USER}', '${DB_PASS}', 10, 1); LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;" 2>/dev/null && \
-    echo "  ✓ Uživatel '${DB_USER}' úspěšně zaregistrován v ProxySQL." || \
-    echo "  ℹ Upozornění: Automatický zápis do ProxySQL (port 6032) neprošel (může být řízen sync skriptem)."
+    PROXY_ERR=""
+    PROXY_CMD="mariadb -h ${MYSQL_HOST} -P ${PROXYSQL_PORT} -u ${PROXYSQL_ADMIN_USER} -p${PROXYSQL_ADMIN_PASS} --skip-ssl"
+    if ! command -v mariadb &>/dev/null; then
+        PROXY_CMD="mysql -h ${MYSQL_HOST} -P ${PROXYSQL_PORT} -u ${PROXYSQL_ADMIN_USER} -p${PROXYSQL_ADMIN_PASS} --skip-ssl"
+    fi
+
+    if PROXY_ERR=$($PROXY_CMD -e "INSERT OR REPLACE INTO mysql_users(username, password, default_hostgroup, transaction_persistent) VALUES ('${DB_USER}', '${DB_PASS}', 10, 1); LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;" 2>&1); then
+        echo "  ✓ Uživatel '${DB_USER}' úspěšně zaregistrován v ProxySQL."
+    else
+        echo "  ℹ Upozornění: Automatický zápis do ProxySQL (port ${PROXYSQL_PORT}) neprošel:"
+        echo "    $PROXY_ERR"
+    fi
 fi
 
 # --- 3. Příprava lokálních souborů a volume ---
@@ -192,7 +200,13 @@ $creds = file_exists($creds_file) ? parse_ini_file($creds_file) : [];
 define('DB_NAME',     $creds['DB_NAME']     ?? getenv('WORDPRESS_DB_NAME')     ?? 'wordpress');
 define('DB_USER',     $creds['DB_USER']     ?? getenv('WORDPRESS_DB_USER')     ?? 'wordpress');
 define('DB_PASSWORD', $creds['DB_PASSWORD'] ?? getenv('WORDPRESS_DB_PASSWORD') ?? '');
-define('DB_HOST',     $creds['DB_HOST']     ?? getenv('WORDPRESS_DB_HOST')     ?? '127.0.0.1');
+
+$db_host = $creds['DB_HOST'] ?? getenv('WORDPRESS_DB_HOST') ?? '127.0.0.1';
+$db_port = $creds['DB_PORT'] ?? getenv('WORDPRESS_DB_PORT') ?? '';
+if (!empty($db_port) && $db_port != '3306' && strpos($db_host, ':') === false) {
+    $db_host .= ':' . $db_port;
+}
+define('DB_HOST',     $db_host);
 define('DB_CHARSET',  'utf8mb4');
 define('DB_COLLATE',  '');
 
