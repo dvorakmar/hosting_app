@@ -237,9 +237,12 @@ $http_host = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'loca
 define('WP_HOME',    $proto . '://' . $http_host . '/' . $site_name);
 define('WP_SITEURL', $proto . '://' . $http_host . '/' . $site_name);
 
-// Zajištění existence symlinku /var/www/html/<site_name> -> . pro obsluhu sub-path URL
-if (!empty($site_name) && !file_exists(__DIR__ . '/' . $site_name)) {
-    @symlink('.', __DIR__ . '/' . $site_name);
+// Zajištění správného REQUEST_URI pro WordPress za sub-path reverzní proxy
+if (isset($_SERVER['HTTP_X_FORWARDED_PREFIX'])) {
+    $prefix = rtrim($_SERVER['HTTP_X_FORWARDED_PREFIX'], '/');
+    if (!empty($prefix) && strpos($_SERVER['REQUEST_URI'], $prefix) !== 0) {
+        $_SERVER['REQUEST_URI'] = $prefix . $_SERVER['REQUEST_URI'];
+    }
 }
 
 // Bezpečnostní klíče a soli
@@ -271,16 +274,16 @@ require_once ABSPATH . 'wp-settings.php';
 EOF
 chmod 644 "${SITE_DIR}/wp-config.php"
 
-# C) Soubor .htaccess s RewriteBase pro daný sub-path
+# C) Soubor .htaccess se standardním WordPress přepisem
 cat > "${SITE_DIR}/.htaccess" << EOF
 # BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
-RewriteBase /${SITE_NAME}/
+RewriteBase /
 RewriteRule ^index\.php$ - [L]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /${SITE_NAME}/index.php [L]
+RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress
 EOF
@@ -398,11 +401,14 @@ else
     exit 1
 fi
 
-# --- 6. Finální inicializace symlinku a kontrola ---
-echo "[6/6] Inicializace WordPress prostředí a symlinku..."
-sleep 3
-# Vytvoření symlinku /var/www/html/<site_name> -> . přímo v kontejneru
-$RUN_CMD exec "${SITE_NAME}-wordpress" ln -sfn . "/var/www/html/${SITE_NAME}" 2>/dev/null || true
+# --- 6. Kontrola běhu kontejneru ---
+echo "[6/6] Kontrola stavu WordPress kontejneru..."
+sleep 2
+if $RUN_CMD ps --filter "name=${SITE_NAME}-wordpress" --filter "status=running" 2>/dev/null | grep -q "${SITE_NAME}-wordpress"; then
+    echo "  ✓ Kontejner ${SITE_NAME}-wordpress je aktivní a naslouchá v síti webhosting-network."
+else
+    echo "  ℹ Kontejner se spouští v pozadí."
+fi
 
 # Zápis do logu
 LOGS_DIR="${PROJECT_ROOT}/data/logs"
