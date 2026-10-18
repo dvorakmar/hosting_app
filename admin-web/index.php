@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db_name = "wp_{$site_name}";
                 $db_user = $site_name;
                 if (file_exists($db_env)) {
-                    $creds = parse_ini_file($db_env);
+                    $creds = parse_env_file($db_env);
                     $db_name = $creds['DB_NAME'] ?? $db_name;
                     $db_user = $creds['DB_USER'] ?? $db_user;
                 }

@@ -47,6 +47,30 @@ function run_script_command($script_file, $arg) {
     ];
 }
 
+function parse_env_file($path) {
+    if (!is_file($path) || !is_readable($path)) {
+        return [];
+    }
+    $data = [];
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if ($lines === false) {
+        return [];
+    }
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') {
+            continue;
+        }
+        if (strpos($line, '=') !== false) {
+            list($key, $value) = explode('=', $line, 2);
+            $key = trim($key);
+            $value = trim($value, " \t\n\r\0\x0B\"'");
+            $data[$key] = $value;
+        }
+    }
+    return $data;
+}
+
 function get_customer_sites($customer_id) {
     $db = get_db();
     if ($db) {
@@ -74,7 +98,7 @@ function get_customer_sites($customer_id) {
                 $db_name = 'Neznámá';
                 $db_user = 'Neznámý';
                 if (file_exists($db_env)) {
-                    $ini = parse_ini_file($db_env);
+                    $ini = parse_env_file($db_env);
                     $db_name = $ini['DB_NAME'] ?? $db_name;
                     $db_user = $ini['DB_USER'] ?? $db_user;
                 }

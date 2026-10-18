@@ -95,7 +95,7 @@ generate_random_string() {
 RANDOM_SUFFIX=$(generate_random_string 6 "a-z0-9")
 DB_NAME="wp_${SITE_NAME}_${RANDOM_SUFFIX}"
 DB_USER="${SITE_NAME}_${RANDOM_SUFFIX}"
-DB_PASS="Wp9#"$(generate_random_string 20 "A-Za-z0-9!#%*")
+DB_PASS="Wp9@"$(generate_random_string 18 "A-Za-z0-9_")
 
 # Náhodné salts pro wp-config.php
 generate_salt() {
@@ -177,12 +177,12 @@ mkdir -p "$SITE_DIR"
 
 # A) Soubor db.env (čtený WordPress kontejnerem z volume)
 cat > "${SITE_DIR}/db.env" << EOF
-DB_NAME=${DB_NAME}
-DB_USER=${DB_USER}
-DB_PASSWORD=${DB_PASS}
-DB_HOST=${MYSQL_HOST}
-DB_PORT=${MYSQL_PORT:-3306}
-SITE_NAME=${SITE_NAME}
+DB_NAME="${DB_NAME}"
+DB_USER="${DB_USER}"
+DB_PASSWORD="${DB_PASS}"
+DB_HOST="${MYSQL_HOST}"
+DB_PORT="${MYSQL_PORT:-3306}"
+SITE_NAME="${SITE_NAME}"
 EOF
 chmod 644 "${SITE_DIR}/db.env"
 
@@ -195,7 +195,18 @@ cat > "${SITE_DIR}/wp-config.php" << 'EOF'
 
 // Načtení přihlašovacích údajů z připojeného db.env souboru
 $creds_file = file_exists('/etc/wordpress/db.env') ? '/etc/wordpress/db.env' : (__DIR__ . '/db.env');
-$creds = file_exists($creds_file) ? parse_ini_file($creds_file) : [];
+$creds = [];
+if (file_exists($creds_file)) {
+    $lines = file($creds_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') continue;
+        if (strpos($line, '=') !== false) {
+            list($k, $v) = explode('=', $line, 2);
+            $creds[trim($k)] = trim($v, " \t\n\r\0\x0B\"'");
+        }
+    }
+}
 
 define('DB_NAME',     $creds['DB_NAME']     ?? getenv('WORDPRESS_DB_NAME')     ?? 'wordpress');
 define('DB_USER',     $creds['DB_USER']     ?? getenv('WORDPRESS_DB_USER')     ?? 'wordpress');
