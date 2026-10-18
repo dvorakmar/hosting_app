@@ -317,8 +317,10 @@ EOF
 chmod 644 "${SITE_HTML_DIR}/.htaccess"
 cp -f "${SITE_HTML_DIR}/.htaccess" "${SITE_DIR}/.htaccess" 2>/dev/null || true
 
-# Zajištění zápisových práv pro kontejner (uploads, plugins apod.)
+# Zajištění zápisových práv a SELinux kontextu pro kontejner (uploads, plugins apod.)
 chmod -R a+rwX "${SITE_HTML_DIR}" 2>/dev/null || true
+chcon -Rt container_file_t "${SITE_HTML_DIR}" "${SITE_DIR}" 2>/dev/null || true
+chcon -Rt container_file_t "${WP_SOURCE_DIR}" 2>/dev/null || true
 
 # --- 4. Aktualizace docker-compose-clients.yml ---
 echo "[4/6] Aktualizace ${CLIENTS_COMPOSE_FILE}..."
@@ -328,15 +330,15 @@ if [ ! -f "$CLIENTS_COMPOSE_FILE" ]; then
     exit 1
 fi
 
-# Příprava bloku služby pro nový WordPress kontejner (přímý bind-mount složky html)
+# Příprava bloku služby pro nový WordPress kontejner (přímý bind-mount složky html s podporou SELinux :z)
 NEW_SERVICE_BLOCK="  # --- SITE: ${SITE_NAME} ---
   ${SITE_NAME}-wordpress:
     image: ${WP_IMAGE}
     container_name: ${SITE_NAME}-wordpress
     restart: unless-stopped
     volumes:
-      - ../data/sites/${SITE_NAME}/html:/var/www/html:rw
-      - ../data/sites/${SITE_NAME}/db.env:/etc/wordpress/db.env:ro
+      - ../data/sites/${SITE_NAME}/html:/var/www/html:rw,z
+      - ../data/sites/${SITE_NAME}/db.env:/etc/wordpress/db.env:ro,z
     networks:
       - webhosting-network
   # --- END: ${SITE_NAME} ---"
